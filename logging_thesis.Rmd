@@ -1,0 +1,1087 @@
+---
+title: "Logging in Paracou - Initial Conditions for FATES"
+output: html_notebook
+---
+
+This chunk fully resets R.
+
+```{r}
+rm(list=ls())       
+graphics.off()      
+gc()                
+options(warn=0)    
+```
+
+# Introduction.
+
+This script seeks to pre-process datasets for Paracou, French Guiana to prepare for data analysis on the impacts of logging. 
+
+Set paths and file names for input and output.
+
+-   **home_path**. The user home path.
+-   **main_path**. Main working directory
+-   **rdata_path**. Output path for R objects (so we can use it for comparisons.)
+
+```{r, label='path-settings',message=FALSE,results='hide',warning=FALSE}
+# Set useful paths and file names
+
+library(readr)
+library(dplyr)
+library(tidyverse)
+
+home_path       = path.expand("~")
+main_path       = file.path(home_path, "dev","senior thesis")
+rdata_path      = file.path(main_path,"Paracou_data")
+
+```
+
+Locations of interest.
+```{r}
+use.continent = c("South America","Central America","North America")
+place   = "Paracou (logging), GUF"
+nocomma = "Paracou"
+iata    = "prc"
+lon     = -52.912222
+lat     =   5.281667
+```
+
+Load data. 
+
+For reference:
+Control plots: P1, P6, P11
+Treatment 1 plots: P2, P7, P9
+Treatment 2 plots: P3, P5, P10
+Treatment 3 plots: P4, P8, P12
+```{r}
+rdata_file <- file.path(rdata_path, "combined_data.rda") 
+
+if (file.exists(rdata_file)) {
+   # If the file exists, load the data
+   cat(" + Load data from file:", basename(rdata_file), "\n")
+   load(rdata_file)
+   
+} else {
+files <- list.files(path = rdata_path, pattern = "*.csv", full.names = TRUE)
+
+# Use lapply to read all CSV files and store them as a list of data frames
+all_data <- lapply(files, read.csv)
+
+# Get all unique column names across all data frames
+all_columns <- unique(unlist(lapply(all_data, colnames)))
+
+# Function to add missing columns to a data frame
+add_missing_columns <- function(df, all_columns) {
+  missing_cols <- setdiff(all_columns, colnames(df))  # Identify missing columns
+  df[missing_cols] <- NA                              # Add missing columns filled with NA
+  return(df)
+}
+# Apply the function to each data frame
+all_data_aligned <- lapply(all_data, add_missing_columns, all_columns = all_columns)
+
+# Now combine the data frames.
+combined_data <- do.call(rbind, all_data_aligned)
+      dummy = save( list              = "combined_data"
+                  , file              = rdata_file
+                  , compress          = "xz"
+                  , compression_level = 9
+                  )#end save
+}
+```
+
+
+```{r}
+# Define the path where you want to save the combined data
+#output_path <- file.path(rdata_path, "combined_data.csv")
+
+# Save the combined data to the specified path
+#write.csv(combined_data, file = output_path, row.names = FALSE)
+```
+
+```{r}
+# Create a variable 'palms' as a logical vector
+palms <- combined_data$Family == "Arecaceae"
+```
+
+```{r}
+#Creating a data frame for Paracou_description
+description = file.path(main_path,"ParacouDescription.csv")
+paracou_description <- read_csv(description, show_col_types = FALSE)
+```
+
+
+```{r} 
+#Creating Microplot system
+combined_data <- combined_data %>%
+  filter(is.finite(Xfield) & is.finite(Yfield)) %>%  # Remove NA or non-finite geolocation
+  mutate(
+    Xfield_bin = cut(Xfield, breaks = seq(0, 250, by = 25), labels = FALSE),
+    Yfield_bin = cut(Yfield, breaks = seq(0, 250, by = 25), labels = FALSE)
+  ) %>%
+  filter(!is.na(Xfield_bin) & !is.na(Yfield_bin)) %>%  # Ensure bins are valid
+  mutate(
+    Microplot = 100 * (Plot - 1) + Xfield_bin + (Yfield_bin - 1) * 10
+  ) %>%
+  mutate(
+    Treatment = case_when(
+      Plot %in% c(1, 6, 11) ~ "Control",
+      Plot %in% c(2, 7, 9) ~ "T1",
+      Plot %in% c(3, 5, 10) ~ "T2",
+      Plot %in% c(4, 8, 12) ~ "T3"
+    )
+  )
+
+head(combined_data)
+min(combined_data$CensusYear, na.rm = TRUE)
+```
+
+
+```{r}
+#Filter out the years where data was not collected for all plots. make note of this to write in thesis. ex. 2008-2022 even years
+deleted_years <- c(2002, 2008, 2010, 2012, 2014, 2016, 2018, 2020, 2022)
+
+use_data <- combined_data %>%
+  mutate(dbh = CircCorr/pi) %>%
+  filter(CodeAlive %in% 1) %>%
+  filter(is.finite(dbh) & (dbh >= 10)) %>%
+  filter(! (CensusYear %in% deleted_years))
+
+
+use_data <- use_data %>%
+  filter(is.finite(Xfield) & is.finite(Yfield)) %>%  # Remove NA or non-finite geolocation
+  mutate(
+    # Update binning to 5x5 grid (50m steps)
+    Xfield_bin = cut(Xfield, breaks = seq(0, 250, by = 50), labels = FALSE),
+    Yfield_bin = cut(Yfield, breaks = seq(0, 250, by = 50), labels = FALSE)
+  ) %>%
+  filter(!is.na(Xfield_bin) & !is.na(Yfield_bin)) %>%  # Ensure bins are valid
+  mutate(
+    # Now use 5 columns, not 10
+    Subplot = 25 * (Plot - 1) + Xfield_bin + (Yfield_bin - 1) * 5,
+    Subplot_area = (50*50)/10000
+  ) %>%
+  mutate(
+    Treatment = case_when(
+      Plot %in% c(1, 6, 11) ~ "Control",
+      Plot %in% c(2, 7, 9) ~ "T1",
+      Plot %in% c(3, 5, 10) ~ "T2",
+      Plot %in% c(4, 8, 12) ~ "T3"
+    )
+  )
+
+sort(unique(use_data$Subplot))
+
+```
+
+
+Ecological composition - finding stem density (number of stems/area)
+```{r}
+# Calculate stem density for every year
+stem_density <- use_data %>%
+  group_by(CensusYear, Subplot, Treatment) %>%
+  summarise(
+    StemCount = n_distinct(idTree),    # Count unique stems
+    Subplot_area = first(Subplot_area),       # Assume PlotArea is consistent within each plot
+    StemDensity = StemCount / Subplot_area # Calculate stem density for each plot
+  ) %>%
+  ungroup()
+
+# Print the resulting summary
+print(stem_density)
+
+max(stem_density$StemDensity)
+```
+
+Average stem density and error bars.
+```{r}
+#Average
+avg_stem_density <- stem_density %>%
+  group_by(CensusYear, Treatment) %>%
+  summarise(
+    mean_density = mean(StemDensity, na.rm = TRUE),
+    sum_density = sum(StemDensity, na.rm = TRUE),
+    se = sd(StemDensity, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+avg_stem_density
+
+ggplot(avg_stem_density, aes(x = CensusYear, y = mean_density, 
+                         color = as.factor(Treatment), 
+                         group = interaction(Treatment))) +
+  geom_line(alpha = 0.5) +  
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_density - se, ymax = mean_density + se), width = 0.5) +
+  theme_minimal() +
+  scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  labs(
+    title = "Average Stem Density Over Time by Treatment",
+    x = "Census Year",
+    y = "Average Stem Density (stems/ha)",
+    color = "Treatment"
+  )
+
+#Median
+
+median_stem_density <- stem_density %>%
+  group_by(Treatment, CensusYear) %>%
+  summarise(
+    Q1 = quantile(StemDensity, 0.25, na.rm = TRUE),
+    median = median(StemDensity, na.rm = TRUE),
+    Q3 = quantile(StemDensity, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+median_stem_density
+
+ggplot(median_stem_density, aes(x = CensusYear, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  theme_minimal() +
+  labs(
+    title = "Median Stem Density Over Time by Treatment",
+    x = "Census Year",
+    y = "Median Stem Density (stems per ha)",
+    color = "Treatment",
+    fill = "Treatment"
+  )
+
+```
+
+```{r}
+# Run ANOVA using the original stem_density values
+anova_model <- aov(StemDensity ~ Treatment, data = stem_density)
+summary(anova_model)
+
+
+#K
+kruskal.test(StemDensity ~ Treatment, data = stem_density)
+pairwise.wilcox.test(stem_density$StemDensity, stem_density$Treatment, p.adjust.method = "bonferroni")
+```
+
+
+```{r}
+# Filter for 1995
+sort(unique(stem_density$CensusYear))
+
+stem_yr <- stem_density %>%   
+  filter(CensusYear == 2005)   
+# Violin plot 
+ggplot(stem_yr, aes(x = Treatment, y = StemDensity, fill = Treatment)) +   geom_violin(trim = FALSE) +   geom_jitter(width = 0.1, alpha = 0.6) + labs(
+    title = paste0("Distribution of Stem Density by Treatment (", unique(stem_yr$CensusYear), ")"),
+    x = "Treatment",
+    y = "Stem Density (stems per ha)"
+  ) +   theme_minimal()
+
+
+```
+
+
+
+
+Basal area.
+```{r}
+
+# Define the conversion factor based on units
+units <- "m2_per_ha"  # Example unit. Change as needed.
+conversion_factor <- switch(units,
+                            "cm2_per_m2" = 1e4,   # Convert cm^2 to m^2
+                            "m2_per_ha" = 1e4,    # Convert m^2 to ha
+                            stop("Invalid units specified. Use 'cm2_per_m2' or 'm2_per_ha'."))
+
+#Basal Area Calculation
+basal_area_summary <- use_data %>%
+  mutate(
+    basal_areatree = (pi * (dbh / 2)^2)  # Basal area per tree in cm^2
+  ) %>%
+  group_by(Subplot, Treatment, CensusYear) %>%
+  summarise(
+    Totalbasalarea = sum(basal_areatree, na.rm = TRUE),      # Total basal area in cm^2   
+    Subplotarea = mean(Subplot_area)) %>%
+  ungroup() %>%
+  mutate(Basalareaperunit = (Totalbasalarea / Subplotarea / conversion_factor)) # Normalize with conversion factor #one unit is a subplot
+
+# Print the result
+nrow(distinct(basal_area_summary))
+
+basal_area_summary$Subplotarea
+
+b_yr <- basal_area_summary %>%   
+  filter(CensusYear == 2023)  
+
+ggplot(b_yr, aes(x = Treatment, y = Basalareaperunit, fill = Treatment)) +   geom_violin(trim = FALSE) +   geom_jitter(width = 0.1, alpha = 0.6) + labs(
+    title = paste0("Distribution of Basal Area by Treatment (", unique(b_yr$CensusYear), ")"),
+    x = "Treatment",
+    y = "Basal Area"
+  ) +   theme_minimal()
+
+
+  
+```
+
+
+```{r}
+
+#Median Basal Area
+basal_area_summary_treatment <- basal_area_summary %>%
+  group_by(Treatment, CensusYear) %>%
+  summarise(
+    Q1 = quantile(Basalareaperunit, 0.25, na.rm = TRUE),
+    median = median(Basalareaperunit, na.rm = TRUE),
+    Q3 = quantile(Basalareaperunit, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Plotting Median and IQ range
+ggplot(basal_area_summary_treatment, aes(x = CensusYear, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  #scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  #scale_fill_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  theme_minimal() +
+  labs(
+    title = "Median Basal Area Over Time by Treatment",
+    x = "Census Year",
+    y = "Basal Area (m² per ha)",
+    color = "Treatment",
+    fill = "Treatment"
+  )
+```
+
+```{r}
+# Avg Basal Area
+avg_basal_area <- basal_area_summary %>%
+  group_by(CensusYear, Treatment) %>%
+  summarise(
+    mean_basal = mean(Basalareaperunit, na.rm = TRUE),
+    se = sd(Basalareaperunit, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+#Plotting Avg Basal Area
+
+ggplot(avg_basal_area, aes(x = CensusYear, y = mean_basal, color = as.factor(Treatment))) +
+  geom_line(size = 0.8) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_basal - se, ymax = mean_basal + se), width = 0.5) +
+  scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  theme_minimal() +
+  labs(
+    title = "Average Basal Area Over Time by Treatment",
+    x = "Census Year",
+    y = "Basal Area (m2 per ha)",
+    color = "Treatment"
+  ) 
+
+```
+
+
+
+Aboveground Biomass / Wood Density
+```{r}
+library(BIOMASS)
+
+#Taxo correction
+Taxo <- correctTaxo(genus = use_data$GenusFilled, species = use_data$SpeciesFilled, useCache = FALSE, verbose = FALSE)
+taxo_data <- use_data %>%
+  mutate(GenusCorr = Taxo$genusCorrected,
+         SpeciesCorr = Taxo$speciesCorrected)
+
+head(taxo_data)
+
+#Wood density
+dataWD <- getWoodDensity(
+  genus = taxo_data$GenusCorr,
+  species = taxo_data$SpeciesCorr,
+  stand = taxo_data$Plot
+)
+
+taxo_data <- taxo_data %>%
+  mutate(meanWD = dataWD$meanWD,
+         levelWD = dataWD$levelWD)
+
+#Retreiving height data from Chave et al. 2012 equation 6
+dataHchave <- retrieveH(
+  D = taxo_data$dbh,
+  coord = taxo_data[, c("Lon", "Lat")]
+)
+
+taxo_data$WD <- dataWD$meanWD
+taxo_data$Hchave <- dataHchave$H
+
+# Compute AGB and store it in taxo_data
+taxo_data <- taxo_data %>%
+  mutate(AGB = computeAGB(D = dbh, WD = meanWD, coord = taxo_data[, c("Lon", "Lat")]))
+
+# Print first few rows to confirm AGB is added
+print(head(taxo_data[, c("Plot", "idTree", "AGB")]))
+
+#Summing AGB across plots
+summarized_data <- taxo_data %>%
+  group_by(CensusYear, Subplot, Treatment) %>%
+  summarize(sum_AGB = sum(AGB, na.rm = TRUE), 
+            agb_density = sum_AGB/Subplot_area,
+            .groups = "drop")
+
+#Median AGB
+agb_median <- summarized_data %>%
+  group_by(Treatment, CensusYear) %>%
+  summarise(
+    Q1 = quantile(agb_density, 0.25, na.rm = TRUE),
+    median = median(agb_density, na.rm = TRUE),
+    Q3 = quantile(agb_density, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Plotting Median and IQ range
+ggplot(agb_median, aes(x = CensusYear, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  #scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  #scale_fill_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  theme_minimal() +
+  labs(
+    title = "Median AGB Over Time by Treatment",
+    x = "Census Year",
+    y = "AGB (Mg per ha)",
+    color = "Treatment",
+    fill = "Treatment"
+  )
+
+
+#Plotting ?
+
+ggplot(avg_agb, aes(x = CensusYear, y = mean_agb, color = as.factor(Treatment))) +
+  #geom_line(size = 0.8) +
+  geom_point(size = 2) +
+  #geom_errorbar(aes(ymin = mean_agb - se, ymax = mean_agb + se), width = 0.5) +
+  scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  theme_minimal() +
+  labs(
+    title = "Mean AGB over Time",
+    x = "Census Year",
+    y = "Aboveground Biomass (mg/ha)",
+    color = "Treatment"
+  ) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+
+```
+
+
+
+Mortality Rates
+```{r}
+#Na
+N_a <- function(data, year) {
+  unique_trees <- unique(data$idTree[data$CensusYear == year & data$CodeAlive == 1])
+  return(length(unique_trees))
+}
+
+#Nb
+N_b <- function(data, year1, year2) {
+  trees_year1 <- unique(data$idTree[data$CensusYear == year1 & data$CodeAlive == 1])
+  trees_year2 <- unique(data$idTree[data$CensusYear == year2 & data$CodeAlive == 1])
+  common_trees <- intersect(trees_year1, trees_year2)
+  return(length(common_trees))
+}  
+
+#Creating a matrix of year pairs
+years_list <- sort(unique(use_data$CensusYear))
+years_pair <- embed(years_list, 2)
+years_pair
+
+
+mortality <- NULL
+for (i in seq_along(years_pair[,1])){ 
+  year_before = years_pair[i,2]
+  year_after = years_pair[i,1]
+  
+  mort_now <- use_data %>%
+    group_by(Subplot) %>%
+    summarize(N_before = N_a(data = .data, year = year_before), N_after = N_b(data = .data, year1 = year_before, year2 = year_after), Treatment = unique(Treatment)) %>%
+    ungroup() %>%
+    mutate(lambda = (log(N_before) - log(N_after)) / (year_after - year_before),
+           mort = (1 - exp(-lambda)) * 100,
+           year_before = year_before,
+           year_after = year_after) 
+  
+  mortality = rbind(mortality, mort_now)
+  
+}
+  
+mortality
+
+avg_mort <- mortality %>%
+  group_by(year_after, Treatment) %>%
+  summarise(
+    mean_mort = mean(mort, na.rm = TRUE),
+    se = sd(mort, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+avg_mort
+
+ggplot(avg_mort, aes(x = year_after, y = log(mean_mort), color = as.factor(Treatment))) +
+  geom_line(size = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  #xlim(c(2000, 2022)) +
+  ylim(c(0, 3)) +
+  theme_minimal() +
+  labs(
+    title = "Average Mortality Rate Over Time by Treatment",
+    x = "Year After",
+    y = "Mortality Rate (%)",
+    color = "Treatment"
+  ) +
+  facet_wrap(vars(Treatment))
+
+
+#Median Mortality
+mort_median <- mortality %>%
+  group_by(Treatment, year_after) %>%
+  summarise(
+    Q1 = quantile(log(mort), 0.25, na.rm = TRUE),
+    median = median(log(mort), na.rm = TRUE),
+    Q3 = quantile(log(mort), 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Plotting Median and IQ range
+ggplot(mort_median, aes(x = year_after, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  theme_minimal() +
+  labs(
+    title = "Median Log Mortality Rate Over Time by Treatment",
+    x = "Census Year",
+    y = "Log Mortality",
+    color = "Treatment",
+    fill = "Treatment"
+  ) + 
+  facet_wrap(vars(Treatment))
+
+
+
+```
+
+
+
+Growth Rates
+```{r}
+
+#Creating a matrix of year pairs
+years_list <- sort(unique(use_data$CensusYear))
+years_pair <- embed(years_list, 2)
+years_pair
+
+use_data
+#By DBH
+growth <- data.frame()
+for (i in seq_along(years_pair[,1])){ 
+  year_before = years_pair[i,2]
+  year_after = years_pair[i,1]
+ 
+  growth_now <- use_data %>%
+    mutate(dbh = ifelse(CodeAlive == 1, yes = dbh, no = NA)) %>%
+    filter(CensusYear %in% c(year_before, year_after)) %>%
+    pivot_wider(id_cols = c(idTree, Plot, Treatment), names_from = CensusYear, values_from = dbh, names_prefix = "dbh_") %>%
+    rename_with(~c("DBH_before", "DBH_after"), starts_with("dbh_")) %>%
+    filter(is.finite(DBH_before) & is.finite(DBH_after)) %>%
+    mutate(g = (log(DBH_after) - log(DBH_before))/(year_after - year_before)) %>%
+    group_by(Plot) %>%
+    summarize(mean_g = mean(g), Treatment = Treatment) %>%
+    ungroup() %>%
+    mutate(year = year_after) 
+    #rename_with(~paste0("mean_g_", year_after), .cols = mean_g)
+    
+  growth = rbind(growth, growth_now)
+  }
+
+growth
+
+
+#1984 - 1990
+ggplot(growth, aes(x = year, y = mean_g, color = as.factor(Plot))) +
+  #xlim(1984, 1990) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  labs(
+    title = "Mean Growth over Time",
+    x = "Year",
+    y = "Mean Growth Rate",
+    color = "Plot"
+  ) +
+  facet_wrap(vars(Treatment))
+
+
+```
+```{r}
+avg_growth <- growth %>%
+  group_by(Treatment, year) %>%
+  summarise(
+    mean_growth = mean(mean_g, na.rm = TRUE),
+    se = sd(mean_g, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+ggplot(avg_growth, aes(x = year, y = mean_growth, color = as.factor(Treatment))) +
+  geom_line(size = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("#bf9000", "#741b47", "#547AA5", "#d8f08e")) +
+  theme_minimal() +
+  labs(
+    title = "Average Growth Rate Over Time by Treatment",
+    x = "Year",
+    y = "Mean Growth Rate (1/year)",
+    color = "Treatment"
+  ) +
+  facet_wrap(vars(Treatment))
+
+
+
+#Median Growth
+growth_median <- growth %>%
+  group_by(Treatment, year) %>%
+  summarise(
+    Q1 = quantile(mean_g, 0.25, na.rm = TRUE),
+    median = median(mean_g, na.rm = TRUE),
+    Q3 = quantile( mean_g, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Plotting Median and IQ range
+ggplot(growth_median, aes(x = year, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  theme_minimal() +
+  labs(
+    title = "Median Average Growth (DBH) Over Time by Treatment",
+    x = "Census Year",
+    y = "Growth(cm)",
+    color = "Treatment",
+    fill = "Treatment"
+  ) +
+  facet_wrap(vars(Treatment))
+
+```
+
+
+
+Bins of DBH
+```{r}
+# Define DBH bins
+use_data <- use_data %>%
+  mutate(DBH_bin = cut(dbh, breaks = c(0, 10, 20, 30, 40, 50, Inf), 
+                       labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "50+"),
+                       include.lowest = TRUE))
+
+# Creating a matrix of year pairs
+years_list <- sort(unique(use_data$CensusYear))
+years_pair <- embed(years_list, 2)
+
+# By DBH bin
+growth <- data.frame()
+for (i in seq_along(years_pair[,1])) { 
+  year_before = years_pair[i,2]
+  year_after = years_pair[i,1]
+  
+  growth_now <- use_data %>%
+    mutate(dbh = ifelse(CodeAlive == 1, dbh, NA)) %>%
+    filter(CensusYear %in% c(year_before, year_after)) %>%
+    pivot_wider(id_cols = c(idTree, Plot, Treatment, DBH_bin), 
+                names_from = CensusYear, values_from = dbh, names_prefix = "dbh_") %>%
+    filter(!is.na(get(paste0("dbh_", year_before))) & !is.na(get(paste0("dbh_", year_after)))) %>%
+    rename(DBH_before = !!sym(paste0("dbh_", year_before)), 
+           DBH_after = !!sym(paste0("dbh_", year_after))) %>%
+    mutate(g = (log(DBH_after) - log(DBH_before)) / (year_after - year_before)) %>%
+    group_by(Plot, DBH_bin) %>%
+    summarize(mean_g = mean(g, na.rm = TRUE), Treatment = first(Treatment)) %>%
+    ungroup() %>%
+    mutate(year = year_after)
+  
+  growth = rbind(growth, growth_now)
+}
+
+
+# Filter and summarize for 10-20 cm bin
+growth_10_20 <- growth %>%
+  filter(DBH_bin == "10-20") %>%
+  group_by(Treatment, year) %>%
+  summarise(
+    mean_growth = mean(mean_g, na.rm = TRUE),
+    se = sd(mean_g, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(DBH_bin = "10-20 cm")  # Label the bin
+
+# Filter and summarize for 40-50 cm bin
+growth_40_50 <- growth %>%
+  filter(DBH_bin == "40-50") %>%
+  group_by(Treatment, year) %>%
+  summarise(
+    mean_growth = mean(mean_g, na.rm = TRUE),
+    se = sd(mean_g, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(DBH_bin = "40-50 cm")  # Label the bin
+
+# Combine the two datasets
+growth_combined <- bind_rows(growth_10_20, growth_40_50)
+
+# Plot: same plot, distinguish DBH bins by line type or shape
+ggplot(growth_combined, aes(x = year, y = mean_growth, color = as.factor(Treatment), linetype = DBH_bin)) +
+  geom_line(size = 0.6) +
+  geom_point(aes(shape = DBH_bin), size = 2) +
+  theme_minimal() +
+  labs(
+    title = "Mean Growth Over Time by DBH Bin and Treatment",
+    x = "Year",
+    y = "Mean Growth Rate (cm/year)",
+    color = "Treatment",
+    linetype = "DBH Bin",
+    shape = "DBH Bin"
+  ) +
+  facet_wrap(vars(Treatment))
+
+
+```
+
+
+Recruitment Rates
+```{r}
+# Function for newly recruited trees
+N_recruits <- function(data, year1, year2) {
+  trees_year1 <- unique(data$idTree[data$CensusYear == year1 & data$CodeAlive == 1])
+  trees_year2 <- unique(data$idTree[data$CensusYear == year2 & data$CodeAlive == 1])
+  new_trees <- setdiff(trees_year2, trees_year1) # Trees in year2 but not in year1
+  return(length(new_trees))
+}
+
+# Function to count total trees alive in year 2
+N_alive <- function(data, year) {
+  unique_trees <- unique(data$idTree[data$CensusYear == year & data$CodeAlive == 1])
+  return(length(unique_trees))
+}
+
+# Creating a matrix of year pairs
+years_list <- sort(unique(use_data$CensusYear))
+years_pair <- embed(years_list, 2)
+
+# Initialize recruitment dataframe
+recruitment <- NULL
+
+for (i in seq_along(years_pair[,1])) {
+  year_before = years_pair[i,2]
+  year_after = years_pair[i,1]
+  
+  recruits_now <- use_data %>%
+    group_by(Plot) %>%
+    summarize(N_new = N_recruits(data = .data, year1 = year_before, year2 = year_after),
+              N_total = N_alive(data = .data, year = year_after),
+              Treatment = unique(Treatment)) %>%
+    ungroup() %>%
+    mutate(lambda = (log(N_total) - log(N_total - N_new)) / (year_after - year_before),
+           recruit_rate = {(1 + N_new/N_total)^(1/(year_after - year_before)) - 1} * 100, #change by looking at paper (Nakagawa, 2000)
+           year_before = year_before,
+           year_after = year_after)
+  
+  recruitment = rbind(recruitment, recruits_now)
+  
+}
+
+recruitment
+
+#Median Recruitment
+recruit_median <- recruitment %>%
+  group_by(Treatment, year_after) %>%
+  summarise(
+    Q1 = quantile(recruit_rate, 0.25, na.rm = TRUE),
+    median = median(recruit_rate, na.rm = TRUE),
+    Q3 = quantile(recruit_rate, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+recruit_median
+
+#Plotting Median and IQ range
+ggplot(recruit_median, aes(x = year_after, color = Treatment)) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3, fill = Treatment), alpha = 0.2, color = NA) +
+  geom_line(aes(y = median), size = 1) +
+  #scale_color_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  #scale_fill_manual(values = c("#405F52", "#60B186", "#547AA5", "#299595")) +
+  theme_minimal() +
+  labs(
+    title = "Median Recruitment Rate Over Time by Treatment",
+    x = "Census Year",
+    y = "Recruitment(%)",
+    color = "Treatment",
+    fill = "Treatment"
+  )
+  #facet_wrap(vars(Treatment))
+
+```
+
+```{r}
+#Pairwise t test function
+pairwise_t_test <- function(x, g, ...){
+  my_test = pairwise.t.test(x = x, g = g, ...)
+  p_vals = my_test$p.value[,1]
+  return(p_vals)
+}
+
+#pairwise t test stem density
+stem_years <- c(unique(stem_density$CensusYear))
+p_vals_stem1 <- NULL
+for (y in stem_years){
+  temp_df <- stem_density %>%
+    filter(CensusYear == y)
+  temp_p_vals <- pairwise_t_test(temp_df$StemDensity, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_stem1 = rbind(p_vals_stem1, temp_results)
+  
+}
+
+#t test against control function
+t_test_control <- function(x, g, ...){
+  x_list = split(x, g)
+  x_control = x_list$Control
+  x_list$Control = NULL
+  p_vals = sapply(X = x_list, FUN = function(x, y, ...) {t.test(x, y, ...)$p.value}, y = x_control)
+  return(p_vals)
+}
+
+#t test against control for stem density
+stem_years <- c(unique(stem_density$CensusYear))
+p_vals_stem1 <- NULL
+for (y in stem_years){
+  temp_df <- stem_density %>%
+    filter(CensusYear == y)
+  temp_p_vals <- t_test_control(temp_df$StemDensity, temp_df$Treatment)
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_stem1 = rbind(p_vals_stem1, temp_results)
+  
+}
+
+p_vals_stem1
+
+#t test against control for basal area
+basal_years <- c(unique(basal_area_summary$CensusYear))
+p_vals_basal1 <- NULL
+for (y in basal_years){
+  temp_df <- basal_area_summary %>%
+    filter(CensusYear == y)
+  temp_p_vals <- t_test_control(temp_df$Totalbasalarea, temp_df$Treatment)
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_basal1 = rbind(p_vals_basal1, temp_results)
+  
+}
+
+p_vals_basal1
+
+#t test against control for AGB
+agb_years <-  c(unique(summarized_data$CensusYear))
+p_vals_agb1 <- NULL
+for (y in agb_years){
+  temp_df <- summarized_data %>%
+    filter(CensusYear == y)
+  temp_p_vals <- t_test_control(temp_df$agb_density, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_agb1 = rbind(p_vals_agb1, temp_results)
+  
+}
+
+p_vals_agb1
+
+#t test against control for mortality
+mort_years <- c(unique(mortality$year_after))
+p_vals_mort <- NULL
+for (y in mort_years){
+  temp_df <- mortality %>%
+    filter(year_after == y)
+  temp_p_vals <- t_test_control(temp_df$mort, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_mort = rbind(p_vals_mort, temp_results)
+  
+}
+
+p_vals_mort
+
+growth_years <- c(unique(growth$year))
+p_vals_growth1 <- NULL
+for (y in growth_years){
+  temp_df <- growth %>%
+    filter(year == y)
+  temp_p_vals <- t_test_control(temp_df$mean_g, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = y, temp_p_vals)
+  p_vals_growth1 = rbind(p_vals_growth1, temp_results)
+  
+}
+
+p_vals_growth1
+
+recruit_years <- c(unique(mortality$year_after))
+p_vals_recruit <- NULL
+for (x in recruit_years){
+  temp_df <- recruitment %>%
+    filter(year_after == x)
+  temp_p_vals <- t_test_control(temp_df$recruit_rate, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = x, temp_p_vals)
+  p_vals_recruit = rbind(p_vals_recruit, temp_results)
+  
+}
+
+p_vals_recruit
+
+#manually running for 1 year
+p_vals_stem1 <- NULL
+y = 1995
+temp_df <- stem_density %>%
+  filter(CensusYear == y)
+temp_p_vals <- pairwise_t_test(temp_df$StemDensity, temp_df$Treatment, p.adjust.method = "bonferroni")
+temp_results <- c(year = y, temp_p_vals)
+p_vals_stem1 = rbind(p_vals_stem1, temp_results)
+
+
+temp_control <- stem_density %>%
+  filter(CensusYear == y) %>%
+  filter(Treatment %in% c("Control"))
+
+
+temp_t1 <- stem_density %>%
+  filter(CensusYear == y) %>%
+  filter(Treatment %in% c("T1"))
+
+#Pairwise Function
+pairwise_wilcox_p <- function(x, g, ...){
+  my_test = pairwise.wilcox.test(x = x, g = g, ...)
+  p_vals = my_test$p.value[,1]
+  return(p_vals)
+}
+
+
+#Recruitment
+
+recruit_years <- c(unique(mortality$year_after))
+p_vals_recruit <- NULL
+for (x in recruit_years){
+  temp_df <- recruitment %>%
+    filter(year_after == x)
+  temp_p_vals <- pairwise_wilcox_p(temp_df$recruit_rate, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = x, temp_p_vals)
+  p_vals_recruit = rbind(p_vals_recruit, temp_results)
+  
+}
+
+p_vals_recruit
+
+
+p_vals_recruit1 <- NULL
+for (x in recruit_years){
+  temp_df <- recruitment %>%
+    filter(year_after == x)
+  temp_p_vals <- pairwise_t_test(temp_df$recruit_rate, temp_df$Treatment, p.adjust.method = "bonferroni")
+  temp_results <- c(year = x, temp_p_vals)
+  p_vals_recruit1 = rbind(p_vals_recruit1, temp_results)
+  
+}
+
+p_vals_recruit1
+
+
+```
+
+
+Setting initial conditions for FATES.
+```{r}
+
+# plot area
+plot_area = 6.25 * 3
+# plot name
+plot_name = 'Paracou'
+# plot year
+plot_year = 1988
+#plot treatment
+plot_treat = c('Control', 'T1', 'T2', 'T3')
+
+
+# units - conversion for dbh column - use the below values: 
+# cm - 1
+# mm - 0.1
+# m - 100
+units = 1
+
+for (plot_treat_now in plot_treat){
+  cat("Processing treatment ", plot_treat_now, "\n")
+  #############################################################################
+  #### 3. Make patches ####
+  treat_data <- use_data %>%
+    filter(Treatment %in% plot_treat_now) %>%
+    filter(CensusYear == plot_year) %>%
+    filter(CodeAlive %in% 1) %>%
+    filter(is.finite(dbh) & (dbh >= 10))
+  
+  #stop('Test')
+  
+  npatches = length(unique(treat_data$Microplot))
+  time = rep(plot_year, npatches)
+  patch_df = as.data.frame(time)
+  # unique patch code
+  patch_df$patch = as.numeric(unique(treat_data$Microplot))
+  
+  # is this patch secondary or primary - 
+  # here we assume  primary for all subplots, but if  this information is available  then change
+  # the lines below
+  # 0  = non forest, 1 = secondary, 2 = primary
+  patch_df$trk = rep(2, npatches)
+  
+  # time since the patch was created - can be set to 0
+  patch_df$age = rep(0.0, npatches)
+  
+  # fraction of the site occupied by the patch
+  patch_df$area = rep((1/npatches), npatches)
+  
+  
+  ### CHANGE THE FILE PATH HERE ###
+  pss_file = file.path(rdata_path, sprintf('%s_%s_%i.pss',  plot_name, plot_treat_now, plot_year))
+  write.table(patch_df, pss_file, row.names=FALSE, sep = " ")
+  
+  #############################################################################
+#### 3. Make cohorts #### 
+  
+  # time is not used by FATES so just use the census year
+time = rep(plot_year, nrow(treat_data))
+co_df = as.data.frame(time)
+
+# which patch is this cohort in? 
+co_df$patch = as.numeric(treat_data$Microplot)
+# convert dbh to cm
+co_df$dbh = treat_data$dbh  * units 
+# set to a negative number - either dbh or height can be read in 
+
+
+# by FATES, the other needs to be negative
+co_df$height = -1.0
+# Assume all trees belong to a single PFT
+co_df$pft = 0
+# Get the number density of cohorts; Plot area given in hectares, 10,000 converts this to m^2 before dividing by npatches to get area of each patch
+patch_size=plot_area * 10000 / npatches
+co_df$nplant = 1/patch_size #stem number density
+
+# check that all trees have a dbh - if not then remove them!
+cut_trees = which(is.na(co_df$dbh))
+if(length(cut_trees) > 0){
+  co_df = co_df[-cut_trees, ]
+}
+#print(range(co_df$dbh, na.rm = TRUE)* pi) 
+print(nrow(co_df))
+
+### CHANGE THE FILE PATH HERE ###
+css_file = file.path(rdata_path, sprintf('%s_%s_%i.css',  plot_name, plot_treat_now, plot_year))
+write.table(co_df, css_file, row.names=FALSE, sep = ' ')
+}
+```
+
+
+
